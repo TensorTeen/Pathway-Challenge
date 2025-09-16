@@ -1,0 +1,4 @@
+{"ts": 1757880456.6659744, "event": "job_started", "data": {}}
+{"ts": 1757880456.6661553, "event": "info", "data": {"message": "qa_loop_start", "question": "what does alphabet do ?"}}
+{"ts": 1757880456.6900275, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "5926f63a-2589-4ace-b9cd-61a3269a106d"}}
+{"ts": 1757880456.690052, "event": "job_finished", "data": {"status": "ok", "trace_id": "5926f63a-2589-4ace-b9cd-61a3269a106d"}}

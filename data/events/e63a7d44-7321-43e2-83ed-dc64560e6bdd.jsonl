@@ -1,0 +1,4 @@
+{"ts": 1757881132.5914252, "event": "job_started", "data": {}}
+{"ts": 1757881132.5915937, "event": "info", "data": {"message": "qa_loop_start", "question": "Making AI Helpful for Everyone how ?"}}
+{"ts": 1757881132.6102362, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "2792e104-2330-46bd-8d5f-19c3811a8275"}}
+{"ts": 1757881132.6102629, "event": "job_finished", "data": {"status": "ok", "trace_id": "2792e104-2330-46bd-8d5f-19c3811a8275"}}
