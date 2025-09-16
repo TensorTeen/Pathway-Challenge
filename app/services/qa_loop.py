@@ -2,7 +2,6 @@ import uuid
 import json
 import traceback
 from typing import Dict, Any, List
-import numpy as np
 from datetime import datetime
 import os
 
@@ -77,9 +76,8 @@ class QALoop:
                 print(f"[RAG] loop={loop_idx} reformulated='{self._t(reformulated)}'")
             trace['steps'].append({'loop': loop_idx, 'type': 'reformulate', 'input': current_query, 'output': reformulated})
 
-            q_vec = self.emb.embed_texts([reformulated])[0]
-            # Step 2: doc retrieval
-            docs = self.store.retrieve_docs(reformulated, q_vec, settings.top_k_docs)
+            # Step 2: doc retrieval (LangChain store directly uses text query)
+            docs = self.store.retrieve_docs(reformulated, settings.top_k_docs)
             if self._debug:
                 print(f"[RAG] loop={loop_idx} retrieved_docs={len(docs)} ids={[d['id'] for d in docs]}")
             trace['steps'].append({'loop': loop_idx, 'type': 'retrieve_docs', 'candidates': docs})
@@ -92,8 +90,8 @@ class QALoop:
             trace['steps'].append({'loop': loop_idx, 'type': 'select_docs', 'selection': list(chosen_ids), 'llm_raw': sel_json})
 
             # Step 4: chunk & table retrieval limited to chosen docs
-            chunks = self.store.retrieve_chunks(reformulated, q_vec, settings.top_k_chunks)
-            tables = self.store.retrieve_tables(reformulated, q_vec, settings.top_k_tables)
+            chunks = self.store.retrieve_chunks(reformulated, settings.top_k_chunks)
+            tables = self.store.retrieve_tables(reformulated, settings.top_k_tables)
             # filter by chosen docs if any
             if chosen_ids:
                 chunks = [c for c in chunks if 'doc-' + c['metadata'].get('source_file', '') in chosen_ids]
@@ -150,9 +148,8 @@ class QALoop:
             if settings.rag_debug:
                 print(f"[RAG] loop={loop_idx} reformulated='{self._t(reformulated)}'")
             trace['steps'].append({'loop': loop_idx, 'type': 'reformulate', 'input': current_query, 'output': reformulated})
-            q_vec = self.emb.embed_texts([reformulated])[0]
             logger.progress('retrieve_docs', loop_idx, settings.iterative_max_loops)
-            docs = self.store.retrieve_docs(reformulated, q_vec, settings.top_k_docs)
+            docs = self.store.retrieve_docs(reformulated, settings.top_k_docs)
             if settings.rag_debug:
                 print(f"[RAG] loop={loop_idx} retrieved_docs={len(docs)} ids={[d['id'] for d in docs]} scores={[round(d.get('score',0.0),3) for d in docs]}")
             trace['steps'].append({'loop': loop_idx, 'type': 'retrieve_docs', 'candidates': docs})
@@ -173,8 +170,8 @@ class QALoop:
                 print(f"[RAG] loop={loop_idx} selected_docs={list(chosen_ids)} reason={self._t(sel_json.get('reason',''))}")
             trace['steps'].append({'loop': loop_idx, 'type': 'select_docs', 'selection': list(chosen_ids), 'llm_raw': sel_json})
             logger.progress('retrieve_chunks', loop_idx, settings.iterative_max_loops)
-            chunks = self.store.retrieve_chunks(reformulated, q_vec, settings.top_k_chunks)
-            tables = self.store.retrieve_tables(reformulated, q_vec, settings.top_k_tables)
+            chunks = self.store.retrieve_chunks(reformulated, settings.top_k_chunks)
+            tables = self.store.retrieve_tables(reformulated, settings.top_k_tables)
             if chosen_ids:
                 chunks = [c for c in chunks if 'doc-' + c['metadata'].get('source_file', '') in chosen_ids]
                 tables = [t for t in tables if 'doc-' + t['metadata'].get('source_file', '') in chosen_ids]

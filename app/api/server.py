@@ -153,6 +153,28 @@ def list_traces():
     traces = sorted(traces, key=lambda x: x.get('created_at') or '', reverse=True)
     return {'traces': traces}
 
+@app.get("/health")
+def health():
+    try:
+        counts = {
+            'docs': len(store.lc_store._docs_texts),
+            'chunks': len(store.lc_store._chunks_texts),
+            'tables': len(store.lc_store._tables_texts)
+        }
+        return {"status": "ok", "backend": "langchain", **counts}
+    except Exception as e:
+        return {"status": "error", "backend": "langchain", "error": str(e)}
+
+@app.get("/trace/{trace_id}")
+def get_trace(trace_id: str):
+    """Return full stored trace JSON including final answer and steps."""
+    trace_path = os.path.join(settings.trace_dir, f"{trace_id}.json")
+    if not os.path.exists(trace_path):
+        raise HTTPException(404, 'Trace not found')
+    with open(trace_path, 'r') as f:
+        trace = json.load(f)
+    return trace
+
 def _explain_trace(trace):
     parts = [f"Answering question: {trace['user_query']}"]
     for step in trace.get('steps', []):

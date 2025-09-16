@@ -3,8 +3,8 @@ from functools import lru_cache
 import os
 
 class Settings(BaseModel):
-    # IMPORTANT: Set OPENAI_API_KEY in environment; default left blank intentionally.
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "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")
+    # IMPORTANT: Set OPENAI_API_KEY in environment; leave blank if not set.
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "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")
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini-2024-07-18"
     summary_chars: int = 5000
@@ -17,10 +17,6 @@ class Settings(BaseModel):
     table_max_rows: int = 50
     table_max_cols: int = 30
 
-    # Hybrid search weights
-    alpha_doc: float = 0.65  # weight for dense vs lexical in doc retrieval
-    alpha_chunk: float = 0.55
-    alpha_table: float = 0.50
 
     persist_dir: str = "data/persist"
     trace_dir: str = "data/traces"

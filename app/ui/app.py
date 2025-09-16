@@ -58,14 +58,17 @@ with tabs[0]:
 with tabs[1]:
     st.header("Ask a Question (async)")
     question = st.text_input("Enter your finance question")
+    answer_container = st.container()
+    trace_container = st.container()
     if st.button("Submit Question") and question:
         r = requests.post(f"{API_URL}/question_async", json={'question': question})
-        if r.ok:
+        if not r.ok:
+            st.error(r.text)
+        else:
             job_id = r.json()['job_id']
             st.info(f"Question processing started. Job ID: {job_id}")
             progress_ph = st.empty()
             events_ph = st.empty()
-            answer_ph = st.empty()
             finished = False
             trace_id = None
             pct = 0.0
@@ -85,14 +88,26 @@ with tabs[1]:
                 time.sleep(0.8)
             st.success("Question processing complete")
             if trace_id:
-                tr = requests.post(f"{API_URL}/explain", json={'trace_id': trace_id})
-                if tr.ok:
-                    answer_ph.subheader("Trace Explanation")
-                    answer_ph.write(tr.json().get('explanation'))
-                # also fetch full trace file by hitting traces list then filter
-                # (or could add endpoint; here keep simple)
-        else:
-            st.error(r.text)
+                # fetch full trace (contains final_answer)
+                tr_full = requests.get(f"{API_URL}/trace/{trace_id}")
+                if tr_full.ok:
+                    full = tr_full.json()
+                    final_answer = full.get('final_answer', {}).get('answer') if isinstance(full.get('final_answer'), dict) else full.get('final_answer')
+                    reasoning = full.get('final_answer', {}).get('reasoning') if isinstance(full.get('final_answer'), dict) else None
+                    if final_answer:
+                        answer_container.subheader("Final Answer")
+                        answer_container.write(final_answer)
+                        if reasoning:
+                            with answer_container.expander("Model Reasoning"):
+                                st.write(reasoning)
+                    # show structured trace below
+                    trace_container.subheader("Trace Steps")
+                    steps = full.get('steps', [])
+                    for s in steps:
+                        with trace_container.expander(f"Loop {s.get('loop')} - {s.get('type')}"):
+                            st.json(s)
+                else:
+                    st.error("Could not fetch trace")
 
 with tabs[2]:
     st.header("Explain a Trace")

@@ -1,28 +1,29 @@
-# Finance QA System
+# Finance QA System (LangChain Retrieval Only)
 
-This project implements a multi-stage iterative Retrieval-Augmented Generation (RAG) system for answering finance-related questions over uploaded PDF documents. It consists of three main components: persistent multi-store vector indexing, iterative reasoning & retrieval loop, and both API + UI layers.
+This project implements a multi-stage iterative Retrieval-Augmented Generation (RAG) system for finance PDFs using a LangChain retrieval backend (FAISS + BM25 Ensemble) plus an iterative reasoning loop and a FastAPI + Streamlit interface.
 
-## 1. Main Store (Three Vector Stores)
-For each uploaded PDF (parsed with **PyMuPDF**) we create:
-1. A coverage summary (first N chars summarized via OpenAI) stored & embedded (document-level store)
-2. Chunk-level embeddings (overlapping sliding window) for fine-grained retrieval
-3. Table embeddings (heuristic detection; representation built from header + first column aggregation)
+## Retrieval Pipeline
+For each uploaded PDF (parsed via **PyMuPDF**):
+1. Summarize initial coverage text (LLM) for document-level representation.
+2. Chunk the full text with a configurable strategy (fixed / sentence / recursive).
+3. Optionally extract heuristic tables.
+4. Persist raw corpora (summaries, chunks, tables) to `data/persist/lc/corpora.json`.
+5. On first query, build BM25 + FAISS vector indexes and compose them with `EnsembleRetriever` (weights 0.4 lexical / 0.6 dense).
 
-All stores persist to `data/persist/` so reloading does not require re-embedding. Deletion by filename updates all stores.
+Indexes are rebuilt lazily (cold start cost) to keep persistence simple and version-agnostic.
 
-## 2. Iterative QA Loop
-Workflow per question:
-1. Query reformulation (LLM JSON output)
-2. Hybrid retrieval (BM25 + dense) over document summaries
-3. LLM doc selection (chooses relevant summary IDs)
-4. Hybrid retrieval over chunks and tables (restricted to selected docs when applicable)
-5. LLM filters candidate chunks & tables; determines answerability, or produces a refined missing-info query
-6. Loop continues (bounded by `iterative_max_loops`) accumulating relevant chunks
-7. Final answer generation with reasoning
+## Iterative QA Loop
+Per question:
+1. LLM reformulates query (JSON).
+2. Ensemble retrieval over summaries.
+3. LLM selects minimal doc subset.
+4. Retrieve chunks/tables from selected docs.
+5. LLM filters chunks, decides answerability, may emit refined query.
+6. Repeat until answerable or loop limit, then final answer (JSON) using accumulated chunks.
 
 Every LLM interaction enforces JSON-only responses with simple schema prompts. A full trace (steps, selections, reasoning) is stored under `data/traces/{trace_id}.json`.
 
-## 3. Interfaces
+## Interfaces
 ### FastAPI Endpoints
 Synchronous:
 - `GET /files` – list indexed PDFs
@@ -44,7 +45,7 @@ Tabs:
 - Explain: fetch explanation for a given trace ID
 
 ## Configuration
-Centralized in `app/core/config.py` (chunk sizes, overlap, hybrid weights, model names, loop limits, summary length, etc.). Environment variable `OPENAI_API_KEY` should be set for real embeddings & chat.
+Centralized in `app/core/config.py` (chunk sizes, overlap, model names, loop limits, summary length, parsing flags). Set `OPENAI_API_KEY` for real embeddings & chat. Without a key, deterministic fallbacks allow offline dev (reduced quality).
 
 ## Running Locally
 Install dependencies:
@@ -66,6 +67,8 @@ streamlit run app/ui/app.py
 Visit UI (default): http://localhost:8501
 
 ### Avoiding Excessive Reloads During Development
+The `--reload` flag watches the entire working directory. Large or frequent writes under `data/` (embeddings, events, traces) can trigger rapid reload cycles. Prefer narrowing reload watch to `app/`.
+
 The `--reload` flag watches the entire working directory. Large or frequent writes under `data/` (embeddings, events, traces) can trigger rapid reload cycles that look like the server is "shutting down" repeatedly. To mitigate:
 
 1. Narrow the watch scope to application code only:

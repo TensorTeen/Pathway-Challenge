@@ -1,11 +1,8 @@
 import os
-import uuid
 from typing import List, Dict, Any
-import numpy as np
 
 from app.core.config import get_settings
-from app.stores.vector_base import SimpleVectorStore, VectorRecord
-from app.stores.hybrid_search import HybridIndex
+from app.stores.langchain_store import LangChainStore
 from app.services.pdf_loader import PDFLoader
 from app.services.openai_client import OpenAIClient
 
@@ -13,24 +10,9 @@ settings = get_settings()
 
 class MainStore:
     def __init__(self):
-        base = settings.persist_dir
-        self.summary_store = SimpleVectorStore(os.path.join(base, 'summaries'))
-        self.chunk_store = SimpleVectorStore(os.path.join(base, 'chunks'))
-        self.table_store = SimpleVectorStore(os.path.join(base, 'tables'))
         self.emb = OpenAIClient()
         self.pdf_loader = PDFLoader(settings.chunk_size, settings.chunk_overlap)
-        # hybrid indices (rebuilt on demand)
-        self._hybrid_chunks = HybridIndex()
-        self._hybrid_tables = HybridIndex()
-        self._hybrid_docs = HybridIndex()
-        self._rebuild_hybrids()
-        # track ingested filenames to avoid duplicate ingestion on scans
-        self._ingested = set(self.list_files())
-
-    def _rebuild_hybrids(self):
-        self._hybrid_chunks.build(self.chunk_store.vectors)
-        self._hybrid_tables.build(self.table_store.vectors)
-        self._hybrid_docs.build(self.summary_store.vectors)
+        self.lc_store = LangChainStore()
 
     def load_pdf(self, file_path: str) -> Dict[str, Any]:
         parsed = self.pdf_loader.load(file_path)
@@ -38,26 +20,18 @@ class MainStore:
         # summary
         coverage_text = parsed['full_text'][:settings.summary_chars]
         summary = self.emb.summarize(coverage_text)
-        sum_vec = self.emb.embed_texts([summary])[0]
-        sum_record = VectorRecord(id=f"doc-{filename}", vector=sum_vec, text=summary, metadata={'source_file': filename, 'type': 'summary'})
-        self.summary_store.add([sum_record])
+        # LangChain path only
         # chunks
-        chunk_texts = [c.text for c in parsed['chunks']]
-        chunk_vecs = self.emb.embed_texts(chunk_texts)
-        chunk_records = []
-        for c, vec in zip(parsed['chunks'], chunk_vecs):
-            meta = c.metadata
-            chunk_records.append(VectorRecord(id=c.id + '-' + filename, vector=vec, text=c.text, metadata=meta))
-        self.chunk_store.add(chunk_records)
+        chunk_records = parsed['chunks']
         # tables
-        table_texts = [t.text for t in parsed['tables']]
-        table_vecs = self.emb.embed_texts(table_texts) if table_texts else []
-        table_records = []
-        for t, vec in zip(parsed['tables'], table_vecs):
-            table_records.append(VectorRecord(id=t.id + '-' + filename, vector=vec, text=t.text, metadata=t.metadata))
-        if table_records:
-            self.table_store.add(table_records)
-        self._rebuild_hybrids()
+        table_records = parsed['tables']
+        # Commit to LangChain store directly
+        self.lc_store.add_document(
+            filename,
+            summary,
+            [ {'id': c.id + '-' + filename, 'text': c.text, 'metadata': c.metadata} for c in chunk_records ],
+            [ {'id': t.id + '-' + filename, 'text': t.text, 'metadata': t.metadata} for t in table_records ]
+        )
         return {
             'filename': filename,
             'summary': summary,
@@ -93,8 +67,7 @@ class MainStore:
         if settings.parse_debug:
             print(f"[INGEST] summary_start file={filename} chars={len(coverage_text)}")
         summary = self.emb.summarize(coverage_text)
-        sum_vec = self.emb.embed_texts([summary])[0]
-        self.summary_store.add([VectorRecord(id=f"doc-{filename}", vector=sum_vec, text=summary, metadata={'source_file': filename, 'type': 'summary'})], flush=False)
+        # LangChain path only
         if logger: logger.info('summary_done')
         if settings.parse_debug:
             print(f"[INGEST] summary_done")
@@ -104,24 +77,23 @@ class MainStore:
         if logger: logger.info('chunk_embedding_start', total=total_chunks)
         if settings.parse_debug:
             print(f"[INGEST] chunk_embedding_start total={total_chunks} batch_size={batch_size}")
-        chunk_records: List[VectorRecord] = []
+        chunk_records = []
         for i in range(0, total_chunks, batch_size):
             batch = chunks[i:i+batch_size]
             texts = [c.text for c in batch]
-            vecs = self.emb.embed_texts(texts)
-            for c, v in zip(batch, vecs):
-                chunk_records.append(VectorRecord(id=c.id + '-' + filename, vector=v, text=c.text, metadata=c.metadata))
+            # embeddings handled by LangChain retriever build later; store raw
+            for c in batch:
+                chunk_records.append(c)
             # periodic progress
             if logger:
                 logger.progress('chunks', min(i+batch_size, total_chunks), total_chunks)
             if settings.parse_debug:
                 print(f"[INGEST] chunk_batch_done upto={min(i+batch_size, total_chunks)}/{total_chunks}")
-        self.chunk_store.add(chunk_records, flush=False)
         if logger: logger.info('chunk_embedding_done', count=total_chunks)
         if settings.parse_debug:
             print(f"[INGEST] chunk_embedding_done count={total_chunks}")
         # tables batched
-        table_records: List[VectorRecord] = []
+        table_records = []
         tables = parsed['tables']
         total_tables = len(tables)
         if tables:
@@ -131,26 +103,28 @@ class MainStore:
             for i in range(0, total_tables, batch_size):
                 batch = tables[i:i+batch_size]
                 texts = [t.text for t in batch]
-                vecs = self.emb.embed_texts(texts)
-                for t, v in zip(batch, vecs):
-                    table_records.append(VectorRecord(id=t.id + '-' + filename, vector=v, text=t.text, metadata=t.metadata))
+                for t in batch:
+                    table_records.append(t)
                 if logger:
                     logger.progress('tables', min(i+batch_size, total_tables), total_tables)
                 if settings.parse_debug:
                     print(f"[INGEST] table_batch_done upto={min(i+batch_size, total_tables)}/{total_tables}")
-            self.table_store.add(table_records, flush=False)
             if logger: logger.info('table_embedding_done', count=total_tables)
             if settings.parse_debug:
                 print(f"[INGEST] table_embedding_done count={total_tables}")
-        # flush all stores once
-        self.summary_store.flush(); self.chunk_store.flush(); self.table_store.flush()
+        # commit to LangChain store once at end
+        self.lc_store.add_document(
+            filename,
+            summary,
+            [ {'id': c.id + '-' + filename, 'text': c.text, 'metadata': c.metadata} for c in chunk_records ],
+            [ {'id': t.id + '-' + filename, 'text': t.text, 'metadata': t.metadata} for t in table_records ]
+        )
         if logger: logger.info('stores_flushed')
         if settings.parse_debug:
             print(f"[INGEST] stores_flushed")
-        self._rebuild_hybrids()
-        if logger: logger.info('hybrids_rebuilt')
+        if logger: logger.info('langchain_store_updated')
         if settings.parse_debug:
-            print(f"[INGEST] hybrids_rebuilt")
+            print(f"[INGEST] langchain_store_updated")
         meta = {
             'filename': filename,
             'summary': summary,
@@ -163,17 +137,18 @@ class MainStore:
         return meta
 
     def delete_file(self, filename: str):
-        self.summary_store.delete_by_file(filename)
-        self.chunk_store.delete_by_file(filename)
-        self.table_store.delete_by_file(filename)
-        self._rebuild_hybrids()
+        def _filter(corpus):
+            return [e for e in corpus if e.get('metadata', {}).get('source_file') != filename]
+        self.lc_store._docs_texts = _filter(self.lc_store._docs_texts)
+        self.lc_store._chunks_texts = _filter(self.lc_store._chunks_texts)
+        self.lc_store._tables_texts = _filter(self.lc_store._tables_texts)
+        self.lc_store._doc_retriever = None
+        self.lc_store._chunk_retriever = None
+        self.lc_store._table_retriever = None
 
     def list_files(self) -> List[str]:
-        files = set()
-        for store in [self.summary_store, self.chunk_store, self.table_store]:
-            for r in store.vectors:
-                files.add(r.metadata.get('source_file'))
-        return sorted(files)
+        files = {e['metadata'].get('source_file') for e in (self.lc_store._docs_texts + self.lc_store._chunks_texts + self.lc_store._tables_texts)}
+        return sorted([f for f in files if f])
 
     def scan_folder(self, logger=None, force: bool = False) -> Dict[str, Any]:
         """Scan the configured watch_dir and ingest any new PDFs.
@@ -190,12 +165,9 @@ class MainStore:
         ingested = []
         if logger: logger.info('scan_start', watch_dir=watch, total=len(pdfs))
         for name in pdfs:
-            if not force and name in self._ingested:
-                continue
             path = os.path.join(watch, name)
             try:
-                meta = self.load_pdf_streaming(path, logger=None)  # internal logger optional
-                self._ingested.add(name)
+                meta = self.load_pdf_streaming(path, logger=None)
                 ingested.append({"filename": name, **meta})
                 if logger: logger.info('file_ingested', filename=name, chunks=meta['num_chunks'], tables=meta['num_tables'])
             except Exception as e:
@@ -204,31 +176,13 @@ class MainStore:
         return {"scanned": len(pdfs), "ingested": len(ingested), "files": ingested}
 
     # retrieval methods
-    def retrieve_docs(self, query: str, query_vec: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
-        res = self._hybrid_docs.hybrid_search(query, query_vec, settings.alpha_doc, top_k)
-        docs = []
-        for r, score in res:
-            packed = self._pack(r, score)
-            # provide explicit summary field (original text is already summary for doc vectors)
-            txt = packed['text']
-            trunc = txt if len(txt) <= settings.doc_summary_max_chars else txt[:settings.doc_summary_max_chars] + '…'
-            packed['summary'] = txt
-            packed['summary_short'] = trunc
-            docs.append(packed)
-        return docs
+    def retrieve_docs(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        return self.lc_store.retrieve_docs(query, top_k)
 
-    def retrieve_chunks(self, query: str, query_vec: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
-        res = self._hybrid_chunks.hybrid_search(query, query_vec, settings.alpha_chunk, top_k)
-        return [self._pack(r, score) for r, score in res]
+    def retrieve_chunks(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        return self.lc_store.retrieve_chunks(query, top_k)
 
-    def retrieve_tables(self, query: str, query_vec: np.ndarray, top_k: int) -> List[Dict[str, Any]]:
-        res = self._hybrid_tables.hybrid_search(query, query_vec, settings.alpha_table, top_k)
-        return [self._pack(r, score) for r, score in res]
+    def retrieve_tables(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        return self.lc_store.retrieve_tables(query, top_k)
 
-    def _pack(self, rec: VectorRecord, score: float) -> Dict[str, Any]:
-        return {
-            'id': rec.id,
-            'text': rec.text,
-            'metadata': rec.metadata,
-            'score': score
-        }
+    # _pack no longer needed (removed custom store logic)

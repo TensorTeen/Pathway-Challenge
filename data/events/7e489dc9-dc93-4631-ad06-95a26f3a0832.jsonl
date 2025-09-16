@@ -1,0 +1,4 @@
+{"ts": 1758002403.9647303, "event": "job_started", "data": {}}
+{"ts": 1758002403.9649274, "event": "info", "data": {"message": "qa_loop_start", "question": "What does google do ?"}}
+{"ts": 1758002421.7239385, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "9115ed40-b6c1-4ad6-bf1e-d5db4c80e045"}}
+{"ts": 1758002421.723969, "event": "job_finished", "data": {"status": "ok", "trace_id": "9115ed40-b6c1-4ad6-bf1e-d5db4c80e045"}}
