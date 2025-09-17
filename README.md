@@ -2,7 +2,7 @@
 
 # Finance Iterative RAG for Annual & 10-K Filings
 
-**Dense-only hierarchical retrieval with iterative evidence curation for long, repetitive financial reports.**
+**Hierarchical retrieval with iterative evidence curation for long, repetitive financial reports.**
 
 </div>
 
