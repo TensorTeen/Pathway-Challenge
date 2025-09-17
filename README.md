@@ -126,7 +126,7 @@ curl -X POST localhost:8000/question -H 'Content-Type: application/json' \
 ## 10. Financial Document Retrieval Challenges Addressed
 | Challenge | Naïve Failure Mode | Mitigation Here |
 |-----------|--------------------|-----------------|
-| Boilerplate repetition | Top-k filled with generic risk text | Summaries + selection bias retrieval toward numerics |
+| Boilerplate repetition | Top-k filled with generic risk text | Summaries + Intial Filtering of Documents |
 | Cross-year drift of metrics | Mixed contexts from different years | Per-doc ID names + selection gating |
 | Long tables converted to text | Embedding noise & truncation | Separate 'tables' collection, capped row/col sampling |
 | Early hallucination | LLM answers after first partial retrieval | Iterative answerability gate |
