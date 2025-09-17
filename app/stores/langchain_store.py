@@ -1,4 +1,5 @@
 import os
+import uuid
 from typing import List, Dict, Any
 
 from app.core.config import get_settings
@@ -6,153 +7,195 @@ from app.services.openai_client import OpenAIClient
 
 settings = get_settings()
 
-# Conditional imports to avoid heavy deps if not used
-try:
-    from langchain_community.vectorstores import FAISS
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-    from langchain_community.embeddings import OpenAIEmbeddings
-    from langchain.retrievers import BM25Retriever, EnsembleRetriever
-except ImportError:  # pragma: no cover
-    FAISS = None  # type: ignore
-    RecursiveCharacterTextSplitter = None  # type: ignore
-    OpenAIEmbeddings = None  # type: ignore
-    BM25Retriever = None  # type: ignore
-    EnsembleRetriever = None  # type: ignore
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import Qdrant as LCQdrant
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
+
 
 class LangChainStore:
-    """LangChain-based retrieval implementation.
+    """Simple dense vector retrieval using Qdrant.
 
-    Maintains three logical corpora: document summaries, chunks, tables.
-    For each we build:
-      - A FAISS dense vector index
-      - A BM25 retriever
-    Then we compose them via an EnsembleRetriever (weighted) per corpus.
-
-    We expose a compatible API: retrieve_docs, retrieve_chunks, retrieve_tables
-    returning list of dict(id,text,metadata,score,summary?,summary_short?).
+    Maintains three Qdrant collections: docs, chunks, tables.
+    Each uses OpenAI embeddings for dense semantic search.
     """
 
     def __init__(self):
-        if FAISS is None:
-            raise RuntimeError("LangChain not installed. Please add langchain-community and faiss-cpu to requirements.")
         self.emb_client = OpenAIClient()
-        # We'll reuse embedding model via LangChain wrapper
         self.embedding = OpenAIEmbeddings(model=settings.embedding_model, openai_api_key=settings.openai_api_key)
-        # corpora
-        self._docs_texts: List[Dict[str, Any]] = []
-        self._chunks_texts: List[Dict[str, Any]] = []
-        self._tables_texts: List[Dict[str, Any]] = []
-        # retrievers (built lazily)
-        self._doc_retriever = None
-        self._chunk_retriever = None
-        self._table_retriever = None
-        # persistence
-        self.persist_dir = os.path.join(settings.persist_dir, 'lc')
+        # persistence directory & embedded Qdrant
+        self.persist_dir = os.path.join(settings.persist_dir, 'qdrant')
         os.makedirs(self.persist_dir, exist_ok=True)
+        self.qdrant = QdrantClient(path=self.persist_dir)
+        self.col_docs = 'docs'
+        self.col_chunks = 'chunks'
+        self.col_tables = 'tables'
+        # vectorstore instances
+        self._docs_vs = None
+        self._chunks_vs = None
+        self._tables_vs = None
+        self._ensure_collections()
         self._load_persisted()
 
-    def add_document(self, filename: str, summary: str, chunks: List[Dict[str, Any]], tables: List[Dict[str, Any]]):
-        # store doc summary
-        self._docs_texts.append({
-            'id': f'doc-{filename}',
-            'text': summary,
-            'metadata': {'source_file': filename, 'type': 'summary'}
-        })
-        for c in chunks:
-            self._chunks_texts.append({
-                'id': c['id'],
-                'text': c['text'],
-                'metadata': {**c.get('metadata', {}), 'source_file': filename}
-            })
-        for t in tables:
-            self._tables_texts.append({
-                'id': t['id'],
-                'text': t['text'],
-                'metadata': {**t.get('metadata', {}), 'source_file': filename, 'type': 'table'}
-            })
-        # invalidate retrievers
-        self._doc_retriever = None
-        self._chunk_retriever = None
-        self._table_retriever = None
-        self._save_persisted()
-
+    # ---------------- Persistence ----------------
     def _save_persisted(self):
-        import json
-        data = {
-            'docs': self._docs_texts,
-            'chunks': self._chunks_texts,
-            'tables': self._tables_texts
-        }
-        with open(os.path.join(self.persist_dir, 'corpora.json'), 'w') as f:
-            json.dump(data, f)
+        # No longer needed for pure Qdrant approach
+        pass
 
     def _load_persisted(self):
-        import json
-        path = os.path.join(self.persist_dir, 'corpora.json')
-        if os.path.exists(path):
+        # Initialize vectorstores pointing to existing collections
+        self._docs_vs = LCQdrant(client=self.qdrant, collection_name=self.col_docs, embeddings=self.embedding)
+        self._chunks_vs = LCQdrant(client=self.qdrant, collection_name=self.col_chunks, embeddings=self.embedding)
+        self._tables_vs = LCQdrant(client=self.qdrant, collection_name=self.col_tables, embeddings=self.embedding)
+
+    def _ensure_collections(self):
+        dim = 1536  # OpenAI text-embedding-3-small dimension
+        existing = {c.name for c in self.qdrant.get_collections().collections}
+        for name in [self.col_docs, self.col_chunks, self.col_tables]:
+            if name not in existing:
+                self.qdrant.create_collection(
+                    collection_name=name,
+                    vectors_config=qmodels.VectorParams(size=dim, distance=qmodels.Distance.COSINE)
+                )
+
+    # ---------------- Adding Documents ----------------
+    def add_document(self, filename: str, summary: str, chunks: List[Dict[str, Any]], tables: List[Dict[str, Any]]):
+        if settings.rag_debug:
+            print(f"[ADD_DOC] filename={filename} summary_len={len(summary) if summary else 0} chunks={len(chunks)} tables={len(tables)}")
+        
+        # Add document summary
+        if summary:
             try:
-                with open(path, 'r') as f:
-                    data = json.load(f)
-                self._docs_texts = data.get('docs', [])
-                self._chunks_texts = data.get('chunks', [])
-                self._tables_texts = data.get('tables', [])
+                doc_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f'doc-{filename}'))
+                self._docs_vs.add_texts(
+                    texts=[summary],
+                    metadatas=[{'source_file': filename, 'type': 'summary', 'original_id': f'doc-{filename}'}],
+                    ids=[doc_uuid]
+                )
+                if settings.rag_debug:
+                    print(f"[ADD_DOC] Added summary for {filename}")
             except Exception as e:
-                print(f"[WARN] Failed to load LangChain corpora: {e}")
+                print(f"[ADD_DOC] ERROR adding summary for {filename}: {e}")
+        
+        # Add chunks
+        if chunks:
+            try:
+                texts = [c['text'] for c in chunks]
+                metadatas = [{**c.get('metadata', {}), 'source_file': filename, 'original_id': c['id']} for c in chunks]
+                # Generate UUIDs for chunk IDs
+                ids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, c['id'])) for c in chunks]
+                self._chunks_vs.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+                if settings.rag_debug:
+                    print(f"[ADD_DOC] Added {len(chunks)} chunks for {filename}")
+            except Exception as e:
+                print(f"[ADD_DOC] ERROR adding chunks for {filename}: {e}")
+        
+        # Add tables
+        if tables:
+            try:
+                texts = [t['text'] for t in tables]
+                metadatas = [{**t.get('metadata', {}), 'source_file': filename, 'type': 'table', 'original_id': t['id']} for t in tables]
+                # Generate UUIDs for table IDs
+                ids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, t['id'])) for t in tables]
+                self._tables_vs.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+                if settings.rag_debug:
+                    print(f"[ADD_DOC] Added {len(tables)} tables for {filename}")
+            except Exception as e:
+                print(f"[ADD_DOC] ERROR adding tables for {filename}: {e}")
 
-    # building helpers
-    def _build_retriever(self, corpus: List[Dict[str, Any]]):
-        from langchain.schema import Document
-        lc_docs = [Document(page_content=e['text'], metadata={'id': e['id'], **e['metadata']}) for e in corpus]
-        if not lc_docs:
-            return None
-        # BM25
-        bm25 = BM25Retriever.from_documents(lc_docs)
-        # Dense
-        faiss_vs = FAISS.from_documents(lc_docs, self.embedding)
-        dense_retr = faiss_vs.as_retriever(search_kwargs={'k': 12})
-        # Ensemble (weights approximate earlier alphas)
-        ensemble = EnsembleRetriever(retrievers=[bm25, dense_retr], weights=[0.4, 0.6])
-        return ensemble
-
-    def _ensure(self):
-        if self._doc_retriever is None:
-            self._doc_retriever = self._build_retriever(self._docs_texts)
-        if self._chunk_retriever is None:
-            self._chunk_retriever = self._build_retriever(self._chunks_texts)
-        if self._table_retriever is None:
-            self._table_retriever = self._build_retriever(self._tables_texts)
-
-    # retrieval API
-    def retrieve_docs(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        self._ensure()
-        if self._doc_retriever is None:
+    def delete_file(self, filename: str):
+        # Delete from each vectorstore by filtering metadata
+        # Note: LangChain Qdrant doesn't have direct delete by metadata
+        # This is a limitation - would need custom implementation or rebuild
+        pass
+    
+    def list_files(self) -> List[str]:
+        # Get unique source files from any collection
+        try:
+            points, _ = self.qdrant.scroll(collection_name=self.col_chunks, limit=1000)
+            files = set()
+            for p in points:
+                payload = p.payload or {}
+                source_file = payload.get('source_file')
+                if source_file:
+                    files.add(source_file)
+                if settings.rag_debug and len(files) < 3:  # Debug first few
+                    print(f"[LIST_FILES_DEBUG] payload keys: {list(payload.keys())}, source_file: {source_file}")
+            print(f"[LIST_FILES] found {len(files)} files: {list(files)}")
+            return sorted(list(files))
+        except Exception as e:
+            print(f"[LIST_FILES] ERROR: {e}")
             return []
-        docs = self._doc_retriever.get_relevant_documents(query)
+    
+    def get_collection_info(self):
+        """Debug method to check collection status"""
+        info = {}
+        for col_name in [self.col_docs, self.col_chunks, self.col_tables]:
+            try:
+                collection_info = self.qdrant.get_collection(col_name)
+                info[col_name] = {
+                    'vectors_count': collection_info.vectors_count,
+                    'points_count': collection_info.points_count
+                }
+            except Exception as e:
+                info[col_name] = {'error': str(e)}
+        if settings.rag_debug:
+            print(f"[COLLECTION_INFO] {info}")
+        return info
+
+    def ensure_built(self):
+        # No-op for dense-only approach - just check collections
+        self.get_collection_info()
+
+
+    # ---------------- Retrieval API ----------------
+    def retrieve_docs(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        docs = self._docs_vs.similarity_search(query, k=top_k)
+        if settings.rag_debug:
+            print(f"[RETRIEVE] docs raw_count={len(docs)} requested_top_k={top_k}")
+        
         out = []
-        for d in docs[:top_k]:
-            doc_id = d.metadata.get('id')
+        for d in docs:
+            doc_id = d.metadata.get('original_id', d.metadata.get('id', 'unknown'))
             txt = d.page_content
             trunc = txt if len(txt) <= settings.doc_summary_max_chars else txt[:settings.doc_summary_max_chars] + '…'
-            out.append({'id': doc_id, 'text': txt, 'metadata': d.metadata, 'score': d.metadata.get('score', 0.0), 'summary': txt, 'summary_short': trunc})
+            out.append({
+                'id': doc_id, 
+                'text': txt, 
+                'metadata': d.metadata, 
+                'score': 0.0,  # similarity_search doesn't return scores by default
+                'summary': txt, 
+                'summary_short': trunc
+            })
         return out
 
     def retrieve_chunks(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        self._ensure()
-        if self._chunk_retriever is None:
-            return []
-        docs = self._chunk_retriever.get_relevant_documents(query)
+        docs = self._chunks_vs.similarity_search(query, k=top_k)
+        if settings.rag_debug:
+            print(f"[RETRIEVE] chunks raw_count={len(docs)} requested_top_k={top_k}")
+        
         out = []
-        for d in docs[:top_k]:
-            out.append({'id': d.metadata.get('id'), 'text': d.page_content, 'metadata': d.metadata, 'score': d.metadata.get('score', 0.0)})
+        for d in docs:
+            out.append({
+                'id': d.metadata.get('original_id', d.metadata.get('id', 'unknown')), 
+                'text': d.page_content, 
+                'metadata': d.metadata, 
+                'score': 0.0
+            })
         return out
 
     def retrieve_tables(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        self._ensure()
-        if self._table_retriever is None:
-            return []
-        docs = self._table_retriever.get_relevant_documents(query)
+        docs = self._tables_vs.similarity_search(query, k=top_k)
+        if settings.rag_debug:
+            print(f"[RETRIEVE] tables raw_count={len(docs)} requested_top_k={top_k}")
+        
         out = []
-        for d in docs[:top_k]:
-            out.append({'id': d.metadata.get('id'), 'text': d.page_content, 'metadata': d.metadata, 'score': d.metadata.get('score', 0.0)})
+        for d in docs:
+            out.append({
+                'id': d.metadata.get('original_id', d.metadata.get('id', 'unknown')), 
+                'text': d.page_content, 
+                'metadata': d.metadata, 
+                'score': 0.0
+            })
         return out
 

@@ -1,173 +1,172 @@
-# Finance QA System (LangChain Retrieval Only)
+<div align="center">
 
-This project implements a multi-stage iterative Retrieval-Augmented Generation (RAG) system for finance PDFs using a LangChain retrieval backend (FAISS + BM25 Ensemble) plus an iterative reasoning loop and a FastAPI + Streamlit interface.
+# Finance Iterative RAG for Annual & 10-K Filings
 
-## Retrieval Pipeline
-For each uploaded PDF (parsed via **PyMuPDF**):
-1. Summarize initial coverage text (LLM) for document-level representation.
-2. Chunk the full text with a configurable strategy (fixed / sentence / recursive).
-3. Optionally extract heuristic tables.
-4. Persist raw corpora (summaries, chunks, tables) to `data/persist/lc/corpora.json`.
-5. On first query, build BM25 + FAISS vector indexes and compose them with `EnsembleRetriever` (weights 0.4 lexical / 0.6 dense).
+**Dense-only hierarchical retrieval with iterative evidence curation for long, repetitive financial reports.**
 
-Indexes are rebuilt lazily (cold start cost) to keep persistence simple and version-agnostic.
+</div>
 
-## Iterative QA Loop
-Per question:
-1. LLM reformulates query (JSON).
-2. Ensemble retrieval over summaries.
-3. LLM selects minimal doc subset.
-4. Retrieve chunks/tables from selected docs.
-5. LLM filters chunks, decides answerability, may emit refined query.
-6. Repeat until answerable or loop limit, then final answer (JSON) using accumulated chunks.
+## 1. Abstract
+Financial annual reports (10-K, shareholder letters) exhibit high structural redundancy across years and issuers: repeated risk factor frames, boilerplate MD&A passages, tabular sections referencing identical KPIs with different period values. Naïve single‑pass RAG over raw chunks wastes retrieval budget on duplicated scaffolding and often surfaces semantically generic passages (e.g. “We face competition…”) instead of numerically grounded evidence. This project implements a lean, fully JSON‑disciplined, iterative Retrieval‑Augmented Generation loop inspired by hierarchical evidence collection (cf. recent multi‑stage RAG work such as HiREC‑style doc→chunk narrowing) but simplified for production pragmatics: (1) summarize each PDF for coarse document‑level routing, (2) LLM chooses candidate documents, (3) dense retrieval over fine‑grained chunks + optional tables limited to those docs, (4) LLM filters / assesses answerability, (5) loop continues with a targeted “missing info” reformulation until sufficient grounded context exists to answer. All retrieval is dense semantic search over Qdrant (no hybrid BM25, no custom scoring), minimizing operational complexity while preserving iterative focus. Full reasoning traces are persisted for auditability.
 
-Every LLM interaction enforces JSON-only responses with simple schema prompts. A full trace (steps, selections, reasoning) is stored under `data/traces/{trace_id}.json`.
+## 2. Key Design Goals & Rationale
+| Goal | Rationale | Implementation Highlight |
+|------|-----------|--------------------------|
+| Hierarchical narrowing | Reduce wasted chunk lookups across large multi‑year corpora | summary → doc selection → chunk/table retrieval |
+| Deterministic JSON I/O | Easy downstream consumption & guardrails | Every LLM call enforces minimal JSON schema |
+| Minimal infra surface | Lower maintenance & cold‑start complexity | Single dense vector backend (Qdrant embedded) |
+| Iterative evidence accrual | Avoid premature answering / hallucination | Missing info query drives additional loops |
+| Auditability | FinReg / compliance style traceability | Structured per‑step trace in `data/traces/` |
 
-## Interfaces
-### FastAPI Endpoints
-Synchronous:
-- `GET /files` – list indexed PDFs
-- `POST /upload` – upload a PDF and index it
-- `DELETE /files/{filename}` – remove a PDF from all stores
-- `POST /question` – run QA loop; returns final answer + trace
-- `POST /explain` – convert stored trace to human-readable explanation
-- `GET /traces` – list stored traces (metadata)
+## 3. Current Architecture (Simplified)
+```
+User Question
+	│
+	▼
+Reformulate (LLM JSON)
+	│ reformulated_query
+	▼
+Doc-Level Dense Retrieval (Qdrant 'docs' collection: summaries)
+	│ candidates
+	▼
+Doc Selection (LLM JSON)
+	│ chosen_doc_ids
+	▼
+Chunk/Table Retrieval (Qdrant 'chunks' & 'tables' collections, filtered by chosen docs)
+	│ evidence candidates
+	▼
+Chunk Filtering + Answerability (LLM JSON)
+	├─ if answerable → Final Answer (LLM JSON)
+	└─ else → Missing Info Query → next loop (max N)
+```
 
-Asynchronous (with progress events):
-- `POST /upload_async` – start async ingestion, returns `{job_id}`
-- `POST /question_async` – start async QA, returns `{job_id}`
-- `GET /jobs/{job_id}` – poll JSONL events: progress, info, errors, completion
+Collections:
+* docs: 1 summary vector per PDF (LLM generated)
+* chunks: sliding / sentence / recursive chunked text
+* tables: lightweight textual table projections (heuristic extraction)
 
-### Streamlit UI (`app/ui/app.py`)
-Tabs:
-- Documents: async upload with live progress + delete
-- Ask: async question handling with progress + recent events + final explanation
-- Explain: fetch explanation for a given trace ID
+All vectors use OpenAI `text-embedding-3-small` (dimension 1536) stored in embedded Qdrant under `data/persist/qdrant`.
 
-## Configuration
-Centralized in `app/core/config.py` (chunk sizes, overlap, model names, loop limits, summary length, parsing flags). Set `OPENAI_API_KEY` for real embeddings & chat. Without a key, deterministic fallbacks allow offline dev (reduced quality).
+## 4. Data Ingestion Pipeline
+1. Parse PDF → full text + (optional) tables (`PDFLoader`).
+2. Generate document summary using chat model (first N chars window).
+3. Chunk text (strategy configurable: fixed, sentence, recursive).
+4. Deterministically generate UUIDv5 IDs for summary, each chunk & table; store original IDs in metadata for trace continuity.
+5. Insert into three Qdrant collections via LangChain `LCQdrant` wrapper.
+6. No hybrid ensemble, no BM25, no lazy rebuild step required.
 
-## Running Locally
-Install dependencies:
+Auto‑scan: On API start, PDFs placed in `data/inbox/` are ingested if `auto_scan_on_start=True`.
+
+## 5. Iterative QA Loop (Detailed)
+Loop Variables: `current_query`, `accumulated_chunks`.
+Per iteration (max `iterative_max_loops`):
+1. Reformulate → JSON {reformulated}
+2. Retrieve doc summaries (`top_k_docs`).
+3. Doc selection → JSON {chosen_doc_ids, reason}
+4. Retrieve chunks (`top_k_chunks`) & tables (`top_k_tables`) globally then filter by chosen docs.
+5. Filter / answerability → JSON {relevant_chunk_ids, answerable, missing_info_query}
+6. If answerable or last loop → Final answer JSON {answer, reasoning}; else set `current_query = missing_info_query` and continue.
+
+All steps appended into a persisted trace file `<trace_id>.json` with timestamps & loop index.
+
+## 6. FastAPI Surface
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /files | List PDFs (currently requires collection scan; simplification WIP) |
+| POST | /upload | Synchronous single PDF ingestion |
+| POST | /upload_async | Async ingestion with event log |
+| POST | /scan | Alias for folder scan ingestion |
+| POST | /scan_folder | Synchronous watch directory scan |
+| DELETE | /files/{filename} | Delete (stub – pending implementation) |
+| POST | /question | Run QA loop & return full trace |
+| POST | /question_async | Async QA with event stream |
+| POST | /explain | Human-readable textual summary of a stored trace |
+| GET | /traces | List stored traces metadata |
+| GET | /trace/{id} | Fetch full trace JSON |
+| GET | /jobs/{job_id} | Poll events for async jobs |
+| GET | /health | Collection counts & heartbeat |
+
+Event logs: JSONL per `job_id` in `data/events/`.
+
+## 7. Streamlit UI (Lean)
+The UI (`app/ui/app.py`) now exposes only:
+* Ask: async question submit → shows progress events & final answer
+* Explain: fetch explanation for a trace ID
+
+Document upload / deletion tab was intentionally removed to reduce surface area.
+
+## 8. Configuration (`app/core/config.py`)
+Important fields:
+* `openai_api_key` – provide via env var
+* `chunk_strategy` – fixed | sentence | recursive
+* `chunk_size`, `chunk_overlap`, `max_chunk_size`
+* `top_k_docs`, `top_k_chunks`, `top_k_tables`, `iterative_max_loops`
+* `simple_pdf_parser`, `enable_table_extraction`
+* Debug toggles: `rag_debug`, `parse_debug`
+* `doc_summary_max_chars`, `summary_chars`
+
+Deprecated: `retrieval_alpha` (legacy hybrid) – slated for removal.
+
+## 9. Installation & Quickstart
 ```bash
 pip install -r requirements.txt
-```
-Export OpenAI key:
-```bash
 export OPENAI_API_KEY=sk-...
+uvicorn app.api.server:app --reload --reload-dir app --port 8000
 ```
-Start API:
-```bash
-uvicorn app.api.server:app --reload --port 8000
-```
-Start UI (new terminal):
+Optional UI:
 ```bash
 streamlit run app/ui/app.py
 ```
-Visit UI (default): http://localhost:8501
-
-### Avoiding Excessive Reloads During Development
-The `--reload` flag watches the entire working directory. Large or frequent writes under `data/` (embeddings, events, traces) can trigger rapid reload cycles. Prefer narrowing reload watch to `app/`.
-
-The `--reload` flag watches the entire working directory. Large or frequent writes under `data/` (embeddings, events, traces) can trigger rapid reload cycles that look like the server is "shutting down" repeatedly. To mitigate:
-
-1. Narrow the watch scope to application code only:
+Drop PDFs into `data/inbox/` or call `/upload`; then ask questions via UI or:
 ```bash
-uvicorn app.api.server:app --reload --reload-dir app --port 8000
-```
-2. Or run without reload for heavy ingestion tests:
-```bash
-uvicorn app.api.server:app --port 8000
-```
-3. Optionally move persistence dirs outside the watched tree, e.g.:
-```bash
-export PERSIST_BASE=../qa_runtime_data
-mkdir -p "$PERSIST_BASE"/{persist,traces,events}
-ln -s "$PERSIST_BASE"/persist data/persist
-ln -s "$PERSIST_BASE"/traces data/traces
-ln -s "$PERSIST_BASE"/events data/events
-```
-4. Event logging & vector persistence are already batched to reduce churn; tune thresholds in `config.py` (`event_buffer_flush_events`, `embedding_batch_size`).
-
-If you still see repeating "Shutting down" messages, confirm they correlate with file change reloads (expected) rather than crashes (check stack traces). No stack trace usually indicates just an auto-reload.
-
-## Persistence
-Embeddings & metadata stored under `data/persist/` (three subfolders). Traces under `data/traces/`. Event streams (progress logs) stored as JSONL under `data/events/` (one file per `job_id`).
-
-## Folder-Based Ingestion (Drop PDFs)
-Instead of calling the upload endpoint you can simply place PDF files into the watched directory defined by `watch_dir` in `config.py` (default: `data/inbox`). On API startup, if `auto_scan_on_start=True`, any new PDFs found there are ingested automatically.
-
-Manual scan endpoint:
-`POST /scan_folder` (optional query param `force=true` to re-ingest existing files)
-
-Example curl:
-```bash
-curl -X POST 'http://localhost:8000/scan_folder'
+curl -X POST localhost:8000/question -H 'Content-Type: application/json' \
+  -d '{"question": "What was Berkshire Hathaway net earnings in 2023?"}'
 ```
 
-Workflow:
-1. Drop `report_Q1.pdf` into `data/inbox/`
-2. (Optional) Trigger manual scan via `/scan_folder`
-3. File is parsed & embedded; progress not event-streamed (synchronous) but batched for performance
-4. The file now appears in `GET /files` and is available to the QA loop
+## 10. Financial Document Retrieval Challenges Addressed
+| Challenge | Naïve Failure Mode | Mitigation Here |
+|-----------|--------------------|-----------------|
+| Boilerplate repetition | Top-k filled with generic risk text | Summaries + selection bias retrieval toward numerics |
+| Cross-year drift of metrics | Mixed contexts from different years | Per-doc ID names + selection gating |
+| Long tables converted to text | Embedding noise & truncation | Separate 'tables' collection, capped row/col sampling |
+| Early hallucination | LLM answers after first partial retrieval | Iterative answerability gate |
+| Traceability for compliance | Hard to audit answer provenance | Structured JSON trace with evidence IDs |
 
-Note: The legacy `/upload` and `/upload_async` endpoints still work; folder ingestion is an alternate path that simplifies deployment when documents arrive via external sync processes.
-
-## Performance: Simplified PDF Parser
-The default configuration now enables a fast parsing path (`simple_pdf_parser=True`) that:
-- Extracts plain page text only (no block / table scans)
-- Skips table detection unless you set `enable_table_extraction=True` AND `simple_pdf_parser=False`
-
-Config flags in `config.py`:
-- `simple_pdf_parser` (default True) — fastest ingestion; only text
-- `enable_table_extraction` (default True) — honored only when `simple_pdf_parser` is False
-
-To restore table extraction and richer parsing:
-```python
-simple_pdf_parser = False
-enable_table_extraction = True
+## 11. Persistence Layout
 ```
-Then restart the API. Expect slower ingestion due to block analysis.
-
-## Chunking Strategies
-You can now choose how text is chunked before embedding via `chunk_strategy` in `config.py`:
-
-Strategies:
-- `fixed` (default): Sliding window of `chunk_size` with `chunk_overlap` (previous behavior, fastest, position-stable).
-- `sentence`: Groups sentences together up to `chunk_size` (tries to avoid splitting sentences mid-way; chunk sizes vary).
-- `recursive`: Sentence grouping first; if any grouped unit still exceeds `max_chunk_size`, it is split using the fixed window fallback.
-
-Additional settings:
-- `max_chunk_size`: Upper bound used by `recursive` strategy.
-- `sentence_split_regex`: Basic regex to separate sentences; adjust for more/less aggressiveness.
-
-Metadata for each chunk still includes `char_start` and `char_end` so you can map embeddings back to original document spans regardless of strategy.
-
-Switch example (sentence grouping):
-```python
-chunk_strategy = "sentence"
+data/
+  inbox/          # drop PDFs for auto-scan
+  persist/
+	 qdrant/       # embedded Qdrant collections (docs, chunks, tables)
+  traces/         # per-answer trace JSON files
+  events/         # async job event logs (.jsonl)
 ```
-Or recursive with safety limit:
-```python
-chunk_strategy = "recursive"
-max_chunk_size = 1400
-```
-After changing, restart the API and re-ingest documents (existing persisted chunks will keep their old segmentation until reprocessed).
 
-## Table Extraction Heuristic
-Tables are detected via multi-space column alignment in block text. Representation = header row joined + sample of first column values. Improve by integrating structured table extraction (future work).
+## 12. Extensibility Hooks
+| Area | Extend By |
+|------|-----------|
+| Embeddings | Swap `OpenAIEmbeddings` for local model wrapper |
+| Document parsing | Replace `PDFLoader` with structured XBRL/SEC parser |
+| Table handling | Add richer semantic representation (cell type features) |
+| Answer validation | Add post‑hoc numeric consistency checker |
+| Evaluation | Insert retrieval hit-rate & answer accuracy harness |
 
-## Development Notes
-- Fallback deterministic hash embeddings allow offline dev but produce meaningless semantic rankings.
-- JSON parsing uses minimal repair logic; consider stricter schema validation.
-- Hybrid weighting is tunable (alpha values in config) per store.
+## 13. Limitations / Known Gaps
+* `/files` listing currently incomplete (scroll over chunks only; multi-collection aggregation WIP).
+* `/delete` endpoint logic not yet implemented (requires point ID lookup & delete by metadata).
+* No deduplication of near-identical boilerplate across issuers (could add MinHash cluster pruning).
+* Single embedding model across summary/chunk/table may be suboptimal for numeric-heavy tables.
+* No guardrail on numeric extraction accuracy (future: regex & reconciliation pass).
 
-## Roadmap Ideas
-- Add evaluation harness (precision/recall of retrieval & answer accuracy)
-- Better table embeddings (cell co-occurrence, numeric feature vectors)
-- Async processing & job queue for large PDF ingestion
-- Caching reformulated queries & partial traces for multi-user sessions
-- Guardrail validation for LLM JSON (pydantic schemas)
+## 14. Roadmap (Short Horizon)
+1. Implement collection-spanning file listing + deletion.
+2. Remove `retrieval_alpha` and residual hybrid code paths.
+3. Add batch question runner & evaluation notebook (precision / latency stats).
+4. Introduce score-returning similarity interface (for debug ranking transparency).
+5. Lightweight provenance rendering (highlight spans per chunk ID).
 
-## Disclaimer
-This system is a prototype for finance document Q&A. Always verify critical financial outputs; no warranty of correctness.
+## 15. Disclaimer
+Prototype system; outputs are not investment advice. Verify all financial figures against primary filings.
+
+---
+Questions or ideas? Open an issue or extend the loop logic in `app/services/qa_loop.py`.

@@ -79,6 +79,12 @@ def upload_pdf_async(background: BackgroundTasks, file: UploadFile = File(...)):
     background.add_task(task)
     return {"job_id": job_id, "status": "started"}
 
+@app.post("/scan")
+def scan_folder_alt():
+    # Alternative endpoint name for scan
+    result = store.scan_folder()
+    return result
+
 @app.post("/scan_folder")
 def scan_folder(force: bool = False):
     # Simple synchronous scan (could be made async with events similar to uploads)
@@ -156,10 +162,12 @@ def list_traces():
 @app.get("/health")
 def health():
     try:
+        # Get collection info from simplified store
+        collection_info = store.lc_store.get_collection_info()
         counts = {
-            'docs': len(store.lc_store._docs_texts),
-            'chunks': len(store.lc_store._chunks_texts),
-            'tables': len(store.lc_store._tables_texts)
+            'docs': collection_info.get('docs', {}).get('points_count', 0),
+            'chunks': collection_info.get('chunks', {}).get('points_count', 0),
+            'tables': collection_info.get('tables', {}).get('points_count', 0)
         }
         return {"status": "ok", "backend": "langchain", **counts}
     except Exception as e:

@@ -1,0 +1,4 @@
+{"ts": 1758036779.3861573, "event": "job_started", "data": {}}
+{"ts": 1758036779.3864172, "event": "info", "data": {"message": "qa_loop_start", "question": "What is the net income of  Alphabet in 2022 ?"}}
+{"ts": 1758036816.266899, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "2fc294b5-607a-4af9-8438-ce5fcb88825b"}}
+{"ts": 1758036816.2669282, "event": "job_finished", "data": {"status": "ok", "trace_id": "2fc294b5-607a-4af9-8438-ce5fcb88825b"}}

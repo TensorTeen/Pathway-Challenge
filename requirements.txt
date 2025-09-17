@@ -12,3 +12,4 @@ requests
 langchain
 langchain-community
 faiss-cpu
+qdrant-client

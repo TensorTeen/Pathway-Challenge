@@ -1,0 +1,4 @@
+{"ts": 1758129366.8605525, "event": "job_started", "data": {}}
+{"ts": 1758129366.8607125, "event": "info", "data": {"message": "qa_loop_start", "question": "List Berkshire's Securities registered pursuant to Section 12(b) and Section 12(g) of the Act of 1934"}}
+{"ts": 1758129382.9284532, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "1ba1371f-cefa-44f3-a2c5-a2486a5873cc"}}
+{"ts": 1758129382.9284785, "event": "job_finished", "data": {"status": "ok", "trace_id": "1ba1371f-cefa-44f3-a2c5-a2486a5873cc"}}

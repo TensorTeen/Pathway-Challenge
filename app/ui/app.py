@@ -10,52 +10,9 @@ st.set_page_config(page_title="Finance QA", layout="wide")
 
 st.title("📊 Finance QA System")
 
-tabs = st.tabs(["Documents", "Ask", "Explain"])
+tabs = st.tabs(["Ask", "Explain"])
 
 with tabs[0]:
-    st.header("Documents")
-    upl = st.file_uploader("Upload PDF (async)", type=['pdf'])
-    if upl is not None and st.button("Start Upload"):
-        files = {'file': (upl.name, upl.read(), upl.type)}
-        r = requests.post(f"{API_URL}/upload_async", files=files)
-        if r.ok:
-            job_id = r.json()['job_id']
-            st.info(f"Upload started. Job ID: {job_id}")
-            progress_ph = st.empty()
-            events_ph = st.empty()
-            finished = False
-            while not finished:
-                evr = requests.get(f"{API_URL}/jobs/{job_id}")
-                if evr.ok:
-                    events = evr.json().get('events', [])
-                    pct = 0.0
-                    for e in events:
-                        if e['event'] == 'progress':
-                            pct = e['data'].get('pct', pct)
-                        if e['event'] == 'job_finished':
-                            finished = True
-                    progress_ph.progress(pct if pct <= 1 else 1.0, text=f"Progress: {pct*100:.1f}%")
-                    # show last few events
-                    events_ph.json(events[-5:])
-                time.sleep(0.7)
-            st.success("Upload completed")
-        else:
-            st.error(r.text)
-    if st.button("Refresh File List"):
-        pass
-    r = requests.get(f"{API_URL}/files")
-    if r.ok:
-        files = r.json().get('files', [])
-        st.write(files)
-        del_choice = st.selectbox("Delete file", [""] + files)
-        if del_choice and st.button("Confirm Delete"):
-            dr = requests.delete(f"{API_URL}/files/{del_choice}")
-            if dr.ok:
-                st.warning(f"Deleted {del_choice}")
-            else:
-                st.error(dr.text)
-
-with tabs[1]:
     st.header("Ask a Question (async)")
     question = st.text_input("Enter your finance question")
     answer_container = st.container()
@@ -109,7 +66,7 @@ with tabs[1]:
                 else:
                     st.error("Could not fetch trace")
 
-with tabs[2]:
+with tabs[1]:
     st.header("Explain a Trace")
     trace_id = st.text_input("Trace ID", value=st.session_state.get('last_trace', {}).get('id', ''))
     if st.button("Explain") and trace_id:

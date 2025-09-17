@@ -4,7 +4,7 @@ import os
 
 class Settings(BaseModel):
     # IMPORTANT: Set OPENAI_API_KEY in environment; leave blank if not set.
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "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")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini-2024-07-18"
     summary_chars: int = 5000
@@ -32,10 +32,12 @@ class Settings(BaseModel):
     sentence_split_regex: str = r"(?<=[.!?])\s+"  # basic sentence boundary
     doc_summary_max_chars: int = 600  # truncate summary shown to selection LLM
 
-    top_k_docs: int = 6
+    top_k_docs: int = 12
     top_k_chunks: int = 12
-    top_k_tables: int = 6
+    top_k_tables: int = 12
     iterative_max_loops: int = 4
+    # Weight for lexical (BM25) vs dense in ensemble (lexical weight = retrieval_alpha, dense weight = 1 - retrieval_alpha)
+    retrieval_alpha: float = 0.1
 
     json_response_system_prompt: str = (
         "You are a helpful finance domain assistant. You MUST ALWAYS respond with valid JSON matching the requested schema. "

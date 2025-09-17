@@ -1,0 +1,4 @@
+{"ts": 1758033488.07122, "event": "job_started", "data": {}}
+{"ts": 1758033488.0722847, "event": "info", "data": {"message": "qa_loop_start", "question": "What are the risks that google has ?"}}
+{"ts": 1758033514.876483, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "a2be18c9-8e5a-4260-a3c2-2ff2cf8acc46"}}
+{"ts": 1758033514.876512, "event": "job_finished", "data": {"status": "ok", "trace_id": "a2be18c9-8e5a-4260-a3c2-2ff2cf8acc46"}}

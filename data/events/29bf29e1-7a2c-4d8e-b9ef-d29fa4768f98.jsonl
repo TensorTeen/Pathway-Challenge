@@ -1,0 +1,4 @@
+{"ts": 1758129321.7083144, "event": "job_started", "data": {}}
+{"ts": 1758129321.7084503, "event": "info", "data": {"message": "qa_loop_start", "question": "What is the largest risk to Google?"}}
+{"ts": 1758129335.5437622, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "e8948dd2-a68b-4134-8f60-3a617aedd171"}}
+{"ts": 1758129335.5444388, "event": "job_finished", "data": {"status": "ok", "trace_id": "e8948dd2-a68b-4134-8f60-3a617aedd171"}}

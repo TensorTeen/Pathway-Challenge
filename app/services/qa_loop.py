@@ -11,17 +11,25 @@ from app.stores.main_store import MainStore
 
 settings = get_settings()
 
-REFORM_PROMPT = """You reformulate finance user queries into a precise, self-contained search query.
-Return JSON: {"reformulated": "string"}
-If already precise, repeat it.
+REFORM_PROMPT = """You are an AI that rewrites user questions about financial topics into concise meta-focused queries. It could happen that the question is not exactly about finance. In which case you need not add extra finance context.
+                    1) Identify the key financial terms or metrics in the question. 
+                    2) Determine which type of documents typically contain those terms. 
+                    4) Do not reveal the transformation process or provide examples.
+                    5) If already precise, repeat it.
+Output the reformulated query in the following JSON Response: {"reformulated": "string"}
 """
 
-DOC_SELECT_PROMPT = """You are given candidate document summaries with relevance scores (higher means more relevant).
-Select the minimal subset that likely contains the answer; prefer higher scores when in doubt.
+DOC_SELECT_PROMPT = """You are a finance expert. You are given candidate document summaries.
+Select the subset of documents that likely contains the answer.
+The summaries might not directly mention the query terms but could still be relevant.
+You need to speculate what might be in the full document based on the summary.
+It is better to choose more documents than too few.
+Choose atleast one document.
 Return JSON: {"chosen_doc_ids": ["doc-..."], "reason": "string"}. If absolutely none relate, return an empty list and explain briefly.
 """
 
-CHUNK_FILTER_PROMPT = """Given a user query and candidate chunks (text with IDs), select the IDs that are relevant. Also decide if question is answerable now.
+CHUNK_FILTER_PROMPT = """Given a user query and candidate chunks (text with IDs), select the IDs that are relevant. 
+Atleast have one chunk that is the most relevant. It is better to include a noisy chunk than to remove a good chunk. Also decide if question is answerable now.
 Return JSON: {"relevant_chunk_ids": ["chunk-..."], "answerable": true/false, "missing_info_query": "string", "reason": "string"}
 If not answerable, craft missing_info_query to retrieve new info.
 """
@@ -77,12 +85,18 @@ class QALoop:
             trace['steps'].append({'loop': loop_idx, 'type': 'reformulate', 'input': current_query, 'output': reformulated})
 
             # Step 2: doc retrieval (LangChain store directly uses text query)
+            import time as _time
+            t0 = _time.time()
             docs = self.store.retrieve_docs(reformulated, settings.top_k_docs)
+            dt = (_time.time() - t0) * 1000.0
+            if self._debug:
+                print(f"[PERF] retrieve_docs loop={loop_idx} ms={dt:.1f}")
             if self._debug:
                 print(f"[RAG] loop={loop_idx} retrieved_docs={len(docs)} ids={[d['id'] for d in docs]}")
             trace['steps'].append({'loop': loop_idx, 'type': 'retrieve_docs', 'candidates': docs})
             # Step 3: doc selection via LLM
             doc_context = json.dumps([{ 'id': d['id'], 'score': round(d['score'],4), 'summary': d.get('summary_short', d.get('text')) } for d in docs])
+            print(f"length of doc_context: {len(doc_context)}")
             sel_json = self._chat('select_docs', settings.json_response_system_prompt, f"{DOC_SELECT_PROMPT}\nQuery: {reformulated}\nDocs: {doc_context}", '{"chosen_doc_ids":[],"reason":"string"}')
             chosen_ids = set(sel_json.get('chosen_doc_ids', []))
             if self._debug:
@@ -101,8 +115,8 @@ class QALoop:
             trace['steps'].append({'loop': loop_idx, 'type': 'retrieve_chunks', 'chunks': chunks, 'tables': tables})
 
             # Step 5: LLM chunk filtering & answerability
-            limited_chunks = chunks[:8] + tables[:4]
-            chunk_context = json.dumps([{ 'id': c['id'], 'text': c['text'][:500] } for c in limited_chunks])
+            limited_chunks = chunks + tables
+            chunk_context = json.dumps([{ 'id': c['id'], 'text': c['text'] } for c in limited_chunks])
             filter_json = self._chat('filter_chunks', settings.json_response_system_prompt, f"{CHUNK_FILTER_PROMPT}\nQuery: {reformulated}\nChunks: {chunk_context}", '{"relevant_chunk_ids":[],"answerable":false,"missing_info_query":"string","reason":"string"}')
             rel_ids = set(filter_json.get('relevant_chunk_ids', []))
             for c in limited_chunks:
@@ -149,7 +163,12 @@ class QALoop:
                 print(f"[RAG] loop={loop_idx} reformulated='{self._t(reformulated)}'")
             trace['steps'].append({'loop': loop_idx, 'type': 'reformulate', 'input': current_query, 'output': reformulated})
             logger.progress('retrieve_docs', loop_idx, settings.iterative_max_loops)
+            import time as _time
+            t0 = _time.time()
             docs = self.store.retrieve_docs(reformulated, settings.top_k_docs)
+            dt = (_time.time() - t0) * 1000.0
+            if settings.rag_debug:
+                print(f"[PERF] retrieve_docs(loop={loop_idx}) ms={dt:.1f}")
             if settings.rag_debug:
                 print(f"[RAG] loop={loop_idx} retrieved_docs={len(docs)} ids={[d['id'] for d in docs]} scores={[round(d.get('score',0.0),3) for d in docs]}")
             trace['steps'].append({'loop': loop_idx, 'type': 'retrieve_docs', 'candidates': docs})

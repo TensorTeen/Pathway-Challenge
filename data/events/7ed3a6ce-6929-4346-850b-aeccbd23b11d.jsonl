@@ -1,0 +1,4 @@
+{"ts": 1758034056.6909273, "event": "job_started", "data": {}}
+{"ts": 1758034056.6911185, "event": "info", "data": {"message": "qa_loop_start", "question": "What are the major risk factors associated with Google ?"}}
+{"ts": 1758034063.7831435, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "0bda9ab2-1a80-4e45-bae9-3a4149a544eb"}}
+{"ts": 1758034063.783173, "event": "job_finished", "data": {"status": "ok", "trace_id": "0bda9ab2-1a80-4e45-bae9-3a4149a544eb"}}

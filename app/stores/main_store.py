@@ -32,6 +32,13 @@ class MainStore:
             [ {'id': c.id + '-' + filename, 'text': c.text, 'metadata': c.metadata} for c in chunk_records ],
             [ {'id': t.id + '-' + filename, 'text': t.text, 'metadata': t.metadata} for t in table_records ]
         )
+        # Warmup retrieval indices immediately so first query isn't penalized by build cost
+        if settings.rag_debug:
+            import time as _time
+            _tw0 = _time.time()
+            self.lc_store.ensure_built()
+            _dtw = (_time.time() - _tw0) * 1000.0
+            print(f"[WARMUP] retrievers_built file={filename} ms={_dtw:.1f}")
         return {
             'filename': filename,
             'summary': summary,
@@ -119,6 +126,13 @@ class MainStore:
             [ {'id': c.id + '-' + filename, 'text': c.text, 'metadata': c.metadata} for c in chunk_records ],
             [ {'id': t.id + '-' + filename, 'text': t.text, 'metadata': t.metadata} for t in table_records ]
         )
+        # Warmup retrieval indices after streaming ingestion
+        if settings.rag_debug:
+            import time as _time
+            _tw0 = _time.time()
+            self.lc_store.ensure_built()
+            _dtw = (_time.time() - _tw0) * 1000.0
+            print(f"[WARMUP] retrievers_built file={filename} ms={_dtw:.1f}")
         if logger: logger.info('stores_flushed')
         if settings.parse_debug:
             print(f"[INGEST] stores_flushed")
@@ -137,18 +151,12 @@ class MainStore:
         return meta
 
     def delete_file(self, filename: str):
-        def _filter(corpus):
-            return [e for e in corpus if e.get('metadata', {}).get('source_file') != filename]
-        self.lc_store._docs_texts = _filter(self.lc_store._docs_texts)
-        self.lc_store._chunks_texts = _filter(self.lc_store._chunks_texts)
-        self.lc_store._tables_texts = _filter(self.lc_store._tables_texts)
-        self.lc_store._doc_retriever = None
-        self.lc_store._chunk_retriever = None
-        self.lc_store._table_retriever = None
+        # Delegate to langchain store
+        self.lc_store.delete_file(filename)
 
     def list_files(self) -> List[str]:
-        files = {e['metadata'].get('source_file') for e in (self.lc_store._docs_texts + self.lc_store._chunks_texts + self.lc_store._tables_texts)}
-        return sorted([f for f in files if f])
+        # Delegate to langchain store
+        return self.lc_store.list_files()
 
     def scan_folder(self, logger=None, force: bool = False) -> Dict[str, Any]:
         """Scan the configured watch_dir and ingest any new PDFs.

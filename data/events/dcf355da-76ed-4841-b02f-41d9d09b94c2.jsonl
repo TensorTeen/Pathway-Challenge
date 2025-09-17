@@ -1,0 +1,4 @@
+{"ts": 1758127742.9860387, "event": "job_started", "data": {}}
+{"ts": 1758127742.9861996, "event": "info", "data": {"message": "qa_loop_start", "question": "What, in percentage, is Google\\'s reliance on advertising ?"}}
+{"ts": 1758127750.6737294, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "d57f238c-745f-4cd8-807d-7c4b72429689"}}
+{"ts": 1758127750.6737578, "event": "job_finished", "data": {"status": "ok", "trace_id": "d57f238c-745f-4cd8-807d-7c4b72429689"}}

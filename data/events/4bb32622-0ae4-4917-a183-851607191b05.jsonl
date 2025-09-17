@@ -1,0 +1,4 @@
+{"ts": 1758129311.6738014, "event": "job_started", "data": {}}
+{"ts": 1758129311.6739683, "event": "info", "data": {"message": "qa_loop_start", "question": "What is the total revenue of Berkshire in 2021"}}
+{"ts": 1758129319.4419816, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "66b8109f-164e-4e57-9168-8a87cd24c25b"}}
+{"ts": 1758129319.442009, "event": "job_finished", "data": {"status": "ok", "trace_id": "66b8109f-164e-4e57-9168-8a87cd24c25b"}}

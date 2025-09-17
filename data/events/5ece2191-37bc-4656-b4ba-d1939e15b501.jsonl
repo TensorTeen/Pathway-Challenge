@@ -1,0 +1,4 @@
+{"ts": 1758129355.822437, "event": "job_started", "data": {}}
+{"ts": 1758129355.8225923, "event": "info", "data": {"message": "qa_loop_start", "question": "Who is Bertie?"}}
+{"ts": 1758129363.9262455, "event": "info", "data": {"message": "qa_loop_complete", "trace_id": "a461c12e-56f8-4f33-a2a6-fcf838a3462c"}}
+{"ts": 1758129363.9262712, "event": "job_finished", "data": {"status": "ok", "trace_id": "a461c12e-56f8-4f33-a2a6-fcf838a3462c"}}
