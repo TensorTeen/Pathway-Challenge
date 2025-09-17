@@ -142,6 +142,9 @@ data/
   events/         # async job event logs (.jsonl)
 ```
 
+## 12. Answer Evaluation
+There are many existing benchmarks that can be used to evaluate the efficiency, accuracy and reliability of the pipeline. For example Hierarchical Retrieval with Evidence Curation for Open-Domain Financial Question Answering on Standardized Documents (ACL 2025), proposes LoFinQA-1.6k, a dataset with over 1,595 question-answer pairs and large corpus of financial data with evaluation being performed by both LLM as a judge for textual answers (DocMath-Eval, ACL 2024). This would be the best dataset to test on due to its testing condition being closer to production as compared to others. Additonally, other datasets exists like TAT-QA, DocFinQA that can be adapted to real-production conditons. Metrics like Accuracy, MaP (for retriever) are commonly used in this domain. Specific to finance, it is good to use metrics like reliability($correct + unsure \over total answer$), where we assess whether the model's answer can be trusted upon.
+
 ## 12. Extensibility Hooks
 | Area | Extend By |
 |------|-----------|
