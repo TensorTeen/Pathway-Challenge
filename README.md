@@ -152,21 +152,13 @@ data/
 | Evaluation | Insert retrieval hit-rate & answer accuracy harness |
 
 ## 13. Limitations / Known Gaps
-* `/files` listing currently incomplete (scroll over chunks only; multi-collection aggregation WIP).
-* `/delete` endpoint logic not yet implemented (requires point ID lookup & delete by metadata).
-* No deduplication of near-identical boilerplate across issuers (could add MinHash cluster pruning).
-* Single embedding model across summary/chunk/table may be suboptimal for numeric-heavy tables.
+* Single embedding model across summary/chunk/table may be suboptimal for numeric-heavy tables. Can Include Embedding Models Finetuned for Finance
+* Can Include DMQR-RAG: Diverse Multi-Query Rewriting for RAG (https://arxiv.org/abs/2411.13154) for obtaining better and richer embeddings for retrieval
+* Can Add advanced OCR and VLM models for extracting information from pictorial data (https://arxiv.org/abs/2405.05260)
 * No guardrail on numeric extraction accuracy (future: regex & reconciliation pass).
 
-## 14. Roadmap (Short Horizon)
-1. Implement collection-spanning file listing + deletion.
-2. Remove `retrieval_alpha` and residual hybrid code paths.
-3. Add batch question runner & evaluation notebook (precision / latency stats).
-4. Introduce score-returning similarity interface (for debug ranking transparency).
-5. Lightweight provenance rendering (highlight spans per chunk ID).
 
-## 15. Disclaimer
-Prototype system; outputs are not investment advice. Verify all financial figures against primary filings.
 
----
-Questions or ideas? Open an issue or extend the loop logic in `app/services/qa_loop.py`.
+## 15. References
+Hierarchical Retrieval with Evidence Curation for Open-Domain Financial Question Answering on Standardized Documents (ACL 2025)
+
